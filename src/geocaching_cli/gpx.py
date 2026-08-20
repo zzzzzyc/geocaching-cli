@@ -280,8 +280,10 @@ def iter_gpx_from_path(path: Path) -> Iterable[tuple[str, bytes, bool]]:
     if zipfile.is_zipfile(path):
         try:
             with zipfile.ZipFile(path) as zf:
-                names = sorted(zf.namelist())
+                names = list(zf.namelist())
                 gpx_names = [n for n in names if n.lower().endswith(".gpx") and not n.endswith("/")]
+                # Main cache GPX first, then *-wpts.gpx, so extra waypoints are not wiped.
+                gpx_names.sort(key=lambda n: (is_waypoint_filename(n), n.lower()))
                 if not gpx_names:
                     raise ImportError_(f"zip 中没有 .gpx 文件: {path}")
                 for name in gpx_names:

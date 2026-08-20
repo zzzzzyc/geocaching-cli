@@ -111,7 +111,7 @@ gc live my-finds --limit 10
 gc auth logout
 ```
 
-若密码登录被 CAPTCHA 拦住：在已经登录的浏览器里复制 `gspkauth` cookie，**只放在本机环境或 gitignore 文件中**：
+程序化密码登录若返回 `CAPTCHA is required to login to the site.`（本仓库在无浏览器环境实测即为此错误），请在已经登录的浏览器里复制 `gspkauth` cookie，**只放在本机环境或 gitignore 文件中**：
 
 ```bash
 export GEOCACHING_COOKIE='cookie 值'

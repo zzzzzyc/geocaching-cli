@@ -56,6 +56,14 @@ def test_import_pocket_query_zip(isolated_home: Path, sample_gpx: Path, sample_w
         assert any(w.wpt_code == "GC3E4F5-1" for w in extras)
 
 
+def test_wpts_before_main_gpx_are_kept(isolated_home: Path, sample_gpx: Path, sample_wpts: Path) -> None:
+    with Store(isolated_home / "caches.db") as store:
+        store.import_path(sample_wpts)
+        store.import_path(sample_gpx)
+        extras = store.waypoints_for("GC1A2B3")
+        assert any(w.wpt_code == "GC1A2B3-P" for w in extras)
+
+
 def test_upsert_updates(isolated_home: Path, sample_gpx: Path) -> None:
     with Store(isolated_home / "caches.db") as store:
         store.import_path(sample_gpx)

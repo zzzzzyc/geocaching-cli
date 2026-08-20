@@ -509,7 +509,7 @@ def auth_login(
                 " 站点要求 CAPTCHA。请在本机浏览器登录后复制 gspkauth cookie，然后执行 "
                 "`gc auth login --cookie <值>` 或设置 GEOCACHING_COOKIE。"
             )
-        _fail(f"登录失败: {exc}.{extra}")
+        _fail(" ".join(part for part in (f"登录失败: {exc}", extra.strip()) if part))
     except LiveError as exc:
         _fail(str(exc))
     if save:
@@ -582,7 +582,7 @@ def _live_client():
         extra = ""
         if exc.captcha:
             extra = " 请改用 `gc auth login --cookie`（从浏览器复制 gspkauth）。"
-        _fail(f"登录失败: {exc}.{extra}")
+        _fail(" ".join(part for part in (f"登录失败: {exc}", extra.strip()) if part))
     except LiveError as exc:
         _fail(str(exc))
 

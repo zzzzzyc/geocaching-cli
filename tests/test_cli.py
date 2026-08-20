@@ -96,7 +96,11 @@ def test_import_zip_and_coord_json(isolated_home: Path, sample_gpx: Path, sample
         zf.write(sample_wpts, arcname="pq-wpts.gpx")
     result = runner.invoke(app, ["import", str(zpath), "--json"])
     assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["imported"][0]["caches_new"] == 4
+    imported = json.loads(result.stdout)["imported"][0]
+    assert imported["caches_new"] == 4
+    assert imported["waypoints"] >= 2
+    shown = runner.invoke(app, ["show", "GC3E4F5", "--json"])
+    assert any(w["wpt_code"] == "GC3E4F5-1" for w in json.loads(shown.stdout)["waypoints"])
 
     checksum = runner.invoke(app, ["coord", "checksum", "GC123", "--json"])
     assert json.loads(checksum.stdout)["digits_sum"] == 6

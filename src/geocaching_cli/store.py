@@ -178,13 +178,16 @@ class Store:
         if replace_children:
             self.conn.execute("DELETE FROM logs WHERE gc_code = ?", (cache.gc_code,))
             self.conn.execute("DELETE FROM attributes WHERE gc_code = ?", (cache.gc_code,))
-            self.conn.execute("DELETE FROM waypoints WHERE gc_code = ?", (cache.gc_code,))
             for log in cache.logs:
                 self._insert_log(cache.gc_code, log)
             for attr in cache.attributes:
                 self._insert_attribute(cache.gc_code, attr)
-            for wpt in cache.waypoints:
-                self._insert_waypoint(wpt, default_gc=cache.gc_code)
+            # Extra parking/stage waypoints usually live in a separate *-wpts.gpx.
+            # Only replace them when this cache record actually carries some.
+            if cache.waypoints:
+                self.conn.execute("DELETE FROM waypoints WHERE gc_code = ?", (cache.gc_code,))
+                for wpt in cache.waypoints:
+                    self._insert_waypoint(wpt, default_gc=cache.gc_code)
         return existing is None
 
     def _insert_log(self, gc_code: str, log: LogRecord) -> None:
