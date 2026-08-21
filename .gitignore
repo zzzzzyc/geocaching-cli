@@ -16,5 +16,7 @@ build/
 .gc_credentials
 credentials.json
 .geocaching-cli/
+.geocaching-cli-test/
+browser-profile/
 .coverage
 htmlcov/
