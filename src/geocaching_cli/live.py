@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 from typing import Any, Iterable
 
+from geocaching_cli.browser_auth import playwright_login
 from geocaching_cli.config import (
     Credentials,
     clear_session,
@@ -73,17 +74,72 @@ def _cookie_map(session) -> dict[str, str]:
     return cookies
 
 
-def persist_session(geocaching) -> None:
+def persist_session(geocaching, cookie_list: list[dict] | None = None) -> None:
     username = getattr(geocaching, "_logged_username", None)
     cookies = _cookie_map(geocaching._session)
-    save_session({"username": username, "cookies": cookies})
+    payload = {"username": username, "cookies": cookies}
+    if cookie_list:
+        payload["cookie_list"] = cookie_list
+    save_session(payload)
 
 
 def _apply_cookies(geocaching, cookies: dict[str, str]) -> None:
     for name, value in cookies.items():
         if not value:
             continue
-        geocaching._session.cookies.set(name, value, domain=".geocaching.com")
+        geocaching._session.cookies.set(name, value, domain=".geocaching.com", path="/")
+
+
+def _apply_cookie_list(geocaching, cookie_list: list[dict]) -> None:
+    for cookie in cookie_list:
+        name = cookie.get("name")
+        value = cookie.get("value")
+        domain = cookie.get("domain") or ""
+        if not name or not value or "geocaching.com" not in domain:
+            continue
+        geocaching._session.cookies.set(
+            name,
+            value,
+            domain=domain,
+            path=cookie.get("path") or "/",
+        )
+
+
+def login_with_browser_cookies(cookie_list: list[dict], *, persist: bool = True):
+    mods = _import_pycaching()
+    Geocaching = mods["Geocaching"]
+    geocaching = Geocaching()
+    _apply_cookie_list(geocaching, cookie_list)
+    login_page = geocaching._request("account/signin", login_check=False)
+    username = geocaching.get_logged_user(login_page)
+    if not username:
+        raise LiveLoginError("浏览器会话 cookie 无效，官网仍未视为已登录。")
+    geocaching._logged_in = True
+    geocaching._logged_username = username
+    if persist:
+        persist_session(geocaching, cookie_list=cookie_list)
+    return geocaching
+
+
+def login_via_playwright(creds: Credentials, *, headed: bool | None = None, persist: bool = True):
+    cookies, cookie_list = playwright_login(creds.username or "", creds.password or "", headed=headed)
+    try:
+        return login_with_browser_cookies(cookie_list, persist=persist)
+    except LiveLoginError:
+        mods = _import_pycaching()
+        Geocaching = mods["Geocaching"]
+        LoginFailedException = mods["LoginFailedException"]
+        geocaching = Geocaching()
+        gspk = cookies.get("gspkauth")
+        if not gspk:
+            raise
+        try:
+            geocaching.login_with_cookie(gspk, username=creds.username)
+        except LoginFailedException as exc:
+            raise _login_error(exc) from exc
+        if persist:
+            persist_session(geocaching, cookie_list=cookie_list)
+        return geocaching
 
 
 def _login_error(exc: Exception) -> LiveLoginError:
@@ -92,10 +148,17 @@ def _login_error(exc: Exception) -> LiveLoginError:
     return LiveLoginError(message, captcha=captcha)
 
 
-def login(creds: Credentials | None = None, *, persist: bool = True) -> Any:
-    """Log in via cookie first, then username/password.
+def login(
+    creds: Credentials | None = None,
+    *,
+    persist: bool = True,
+    browser: bool = True,
+    headed: bool | None = None,
+) -> Any:
+    """Log in via cookie, then Playwright, then pycaching form POST.
 
-    Cookie login is the CAPTCHA fallback. This function never prints secrets.
+    Playwright is the default password path because a requests POST is
+    rejected with reCAPTCHA. This function never prints secrets.
     """
     mods = _import_pycaching()
     Geocaching = mods["Geocaching"]
@@ -120,6 +183,9 @@ def login(creds: Credentials | None = None, *, persist: bool = True) -> Any:
             if not creds.has_password:
                 raise LiveLoginError(str(exc)) from exc
 
+    if creds.has_password and browser:
+        return login_via_playwright(creds, headed=headed, persist=persist)
+
     if creds.has_password:
         try:
             geocaching.login(creds.username, creds.password)
@@ -132,8 +198,7 @@ def login(creds: Credentials | None = None, *, persist: bool = True) -> Any:
             raise LiveLoginError(str(exc)) from exc
 
     raise LiveLoginError(
-        "未配置登录信息。请设置 GEOCACHING_USERNAME / GEOCACHING_PASSWORD，"
-        "或在 CAPTCHA 后设置 GEOCACHING_COOKIE（gspkauth），或运行 gc auth login。"
+        "未配置登录信息。请设置 GEOCACHING_USERNAME / GEOCACHING_PASSWORD，然后运行 gc auth login。"
     )
 
 
@@ -145,6 +210,12 @@ def connect(*, force_login: bool = False) -> Any:
 
     if not force_login:
         stored = load_session()
+        cookie_list = (stored or {}).get("cookie_list") or []
+        if cookie_list:
+            try:
+                return login_with_browser_cookies(cookie_list, persist=False)
+            except LiveLoginError:
+                clear_session()
         cookies = (stored or {}).get("cookies") or {}
         gspk = cookies.get("gspkauth")
         if gspk:
@@ -154,7 +225,6 @@ def connect(*, force_login: bool = False) -> Any:
                 return geocaching
             except (LoginFailedException, Exception):
                 clear_session()
-            # Fall through to password / env credentials.
 
     return login(load_credentials(), persist=True)
 

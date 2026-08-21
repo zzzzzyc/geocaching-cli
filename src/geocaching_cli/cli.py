@@ -41,21 +41,26 @@ from geocaching_cli.store import Store
 
 app = typer.Typer(
     name="gc",
-    help="离线优先的 Geocaching 个人 CLI：导入 GPX / Pocket Query，本地检索，可选 pycaching 在线命令。",
+    help="Geocaching.com 个人 CLI：Playwright 登录后 search / show / logs。",
     no_args_is_help=True,
     pretty_exceptions_enable=False,
     add_completion=False,
 )
 
 coord_app = typer.Typer(help="坐标解析、投影、中点与数字校验和。", no_args_is_help=True)
-auth_app = typer.Typer(help="geocaching.com 登录状态（仅用于 live 子命令）。", no_args_is_help=True)
+auth_app = typer.Typer(help="geocaching.com 登录（Playwright 处理 reCAPTCHA）。", no_args_is_help=True)
 live_app = typer.Typer(
-    help="通过 pycaching 访问 geocaching.com。离线命令不依赖此组；失败时本地库仍可用。",
+    help="官网命令别名（与顶级 search / show / logs / finds 相同）。",
+    no_args_is_help=True,
+)
+local_app = typer.Typer(
+    help="本地 GPX / SQLite，次要路径。主命令走官网。",
     no_args_is_help=True,
 )
 app.add_typer(coord_app, name="coord")
 app.add_typer(auth_app, name="auth")
 app.add_typer(live_app, name="live")
+app.add_typer(local_app, name="local")
 
 
 def _version_callback(value: bool) -> None:
@@ -135,7 +140,7 @@ def _filter_kwargs(
     }
 
 
-@app.command("import")
+@local_app.command("import")
 def import_cmd(
     paths: list[Path] = typer.Argument(..., help="Groundspeak GPX 或 Pocket Query zip，可多个。", exists=True),
     as_json: bool = typer.Option(False, "--json", help="以 JSON 输出导入报告。"),
@@ -160,7 +165,7 @@ def import_cmd(
     err_console.print(f"数据库 {db_path()}")
 
 
-@app.command("list")
+@local_app.command("list")
 def list_cmd(
     query: Optional[str] = typer.Option(None, "--q", "-q", help="名称 / GC 码 / 描述 / 提示关键词。"),
     near: Optional[str] = typer.Option(None, "--near", help="中心坐标，任意 DD/DMM/DMS。"),
@@ -189,8 +194,8 @@ def list_cmd(
     print_cache_table(caches, title=f"本地缓存 ({len(caches)})", show_distance=near is not None)
 
 
-@app.command("search")
-def search_cmd(
+@local_app.command("search")
+def local_search_cmd(
     query: Optional[str] = typer.Option(None, "--q", "-q", help="名称 / GC 码 / 描述 / 提示关键词。"),
     near: Optional[str] = typer.Option(None, "--near", help="中心坐标，任意 DD/DMM/DMS。"),
     radius: Optional[float] = typer.Option(None, "--radius", help="与 --near 联用的半径（千米）。"),
@@ -213,8 +218,8 @@ def search_cmd(
     )
 
 
-@app.command("show")
-def show_cmd(
+@local_app.command("show")
+def local_show_cmd(
     gc_code: str = typer.Argument(..., help="GC 码，如 GC1A2B3。"),
     as_json: bool = typer.Option(False, "--json", help="以 JSON 输出完整记录。"),
 ) -> None:
@@ -222,14 +227,14 @@ def show_cmd(
     with _store() as store:
         cache = store.get(gc_code)
     if cache is None:
-        _fail(f"本地库没有 {gc_code.upper()}。先 gc import <gpx|zip>，或试 gc live show {gc_code.upper()}。")
+            _fail(f"本地库没有 {gc_code.upper()}。官网查询请用 gc show {gc_code.upper()}。")
     if as_json:
         emit_json(cache.to_dict())
         return
     print_cache_detail(cache)
 
 
-@app.command("export")
+@local_app.command("export")
 def export_cmd(
     dest: Path = typer.Argument(..., help="输出文件路径（.gpx 或 .json）。"),
     query: Optional[str] = typer.Option(None, "--q", "-q", help="名称 / GC 码 / 描述 / 提示关键词。"),
@@ -274,7 +279,7 @@ def export_cmd(
     err_console.print(f"[green]已导出[/green] {len(full)} 条 → {dest}")
 
 
-@app.command("plan")
+@local_app.command("plan")
 def plan_cmd(
     start: Optional[str] = typer.Option(None, "--start", help="起点坐标。省略则用第一条有坐标的缓存。"),
     query: Optional[str] = typer.Option(None, "--q", "-q", help="先按关键词筛选再规划。"),
@@ -319,7 +324,7 @@ def plan_cmd(
     )
 
 
-@app.command("stats")
+@local_app.command("stats")
 def stats_cmd(
     as_json: bool = typer.Option(False, "--json", help="以 JSON 输出统计。"),
 ) -> None:
@@ -478,12 +483,14 @@ def coord_checksum(
 def auth_login(
     username: Optional[str] = typer.Option(None, "--username", "-u", help="Geocaching.com 用户名。默认读环境变量或本地凭证文件。"),
     password: Optional[str] = typer.Option(None, "--password", "-p", help="密码。更推荐用 GEOCACHING_PASSWORD，避免出现在 shell 历史。"),
-    cookie: Optional[str] = typer.Option(None, "--cookie", help="浏览器中的 gspkauth cookie，用于绕过 CAPTCHA。"),
+    cookie: Optional[str] = typer.Option(None, "--cookie", help="已有 gspkauth cookie，跳过浏览器。"),
     cookie_file: Optional[Path] = typer.Option(None, "--cookie-file", help="只含 cookie 值的本地文件（不要放进仓库）。"),
-    save: bool = typer.Option(True, "--save/--no-save", help="把用户名/密码/cookie 写到 gitignore 的本地凭证文件。"),
+    browser: bool = typer.Option(True, "--browser/--no-browser", help="默认用 Playwright 打开官网登录页并处理 reCAPTCHA。"),
+    headed: bool = typer.Option(True, "--headed/--headless", help="弹出浏览器窗口。验证码出现时必须看得见才能点。"),
+    save: bool = typer.Option(True, "--save/--no-save", help="把用户名/密码写到 gitignore 的本地凭证文件。"),
     as_json: bool = typer.Option(False, "--json", help="以 JSON 输出结果。"),
 ) -> None:
-    """登录 geocaching.com。优先密码；若遇 CAPTCHA 可改用 --cookie。"""
+    """用 Playwright 登录 geocaching.com，拿到会话后再跑 search / show。"""
     from geocaching_cli import live as live_mod
 
     creds = load_credentials()
@@ -501,14 +508,11 @@ def auth_login(
         if not creds.password:
             creds.password = typer.prompt("密码", hide_input=True)
     try:
-        geocaching = live_mod.login(creds, persist=True)
+        geocaching = live_mod.login(creds, persist=True, browser=browser, headed=headed)
     except LiveLoginError as exc:
         extra = ""
         if exc.captcha:
-            extra = (
-                " 站点要求 CAPTCHA。请在本机浏览器登录后复制 gspkauth cookie，然后执行 "
-                "`gc auth login --cookie <值>` 或设置 GEOCACHING_COOKIE。"
-            )
+            extra = " 再试 `gc auth login --headed`，在弹出窗口里完成验证码。"
         _fail(" ".join(part for part in (f"登录失败: {exc}", extra.strip()) if part))
     except LiveError as exc:
         _fail(str(exc))
@@ -519,6 +523,9 @@ def auth_login(
         emit_json(payload)
         return
     err_console.print(f"[green]已登录[/green] {payload['username']}")
+
+
+app.command("login")(auth_login)
 
 
 @auth_app.command("status")
@@ -581,12 +588,13 @@ def _live_client():
     except LiveLoginError as exc:
         extra = ""
         if exc.captcha:
-            extra = " 请改用 `gc auth login --cookie`（从浏览器复制 gspkauth）。"
+            extra = " 请先跑 `gc auth login --headed`。"
         _fail(" ".join(part for part in (f"登录失败: {exc}", extra.strip()) if part))
     except LiveError as exc:
         _fail(str(exc))
 
 
+@app.command("search")
 @live_app.command("search")
 def live_search(
     gc_code: Optional[str] = typer.Argument(None, help="可选 GC 码：先取该点再搜索附近。"),
@@ -631,6 +639,7 @@ def live_search(
     print_cache_table(caches, title=f"在线搜索 ({len(caches)})")
 
 
+@app.command("show")
 @live_app.command("show")
 def live_show(
     gc_code: str = typer.Argument(..., help="GC 码，如 GC1PAR2。"),
@@ -656,6 +665,7 @@ def live_show(
     print_cache_detail(cache)
 
 
+@app.command("logs")
 @live_app.command("logs")
 def live_logs(
     gc_code: str = typer.Argument(..., help="GC 码。"),
@@ -686,6 +696,7 @@ def live_logs(
     )
 
 
+@app.command("finds")
 @live_app.command("my-finds")
 def live_my_finds(
     limit: int = typer.Option(10, "--limit", "-n", help="最多条数。"),

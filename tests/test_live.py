@@ -89,7 +89,7 @@ def test_auth_login_error_is_clean(isolated_home, monkeypatch) -> None:
         raise LiveLoginError("CAPTCHA is required to login to the site.", captcha=True)
 
     monkeypatch.setattr("geocaching_cli.live.login", boom)
-    result = runner.invoke(app, ["auth", "login", "-u", "user", "-p", "pass"])
+    result = runner.invoke(app, ["auth", "login", "-u", "user", "-p", "pass", "--no-browser"])
     assert result.exit_code == 1
     assert "CAPTCHA" in result.output
-    assert "gspkauth" in result.output
+    assert "headed" in result.output

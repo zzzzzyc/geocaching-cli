@@ -1,3 +1,3 @@
-"""Personal offline-first Geocaching CLI."""
+"""Personal Geocaching CLI (live geocaching.com + optional local GPX)."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
